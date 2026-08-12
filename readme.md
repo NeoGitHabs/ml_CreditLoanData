@@ -17,12 +17,31 @@ Manual loan underwriting is slow, inconsistent, and expensive — analysts revie
 
 ---
 
+## Project Structure
+
+```
+ml_CreditLoanData/
+├── .gitignore
+├── requirements.txt
+├── readme.md
+└── CreditLoanData/
+    ├── CreditLoanData.ipynb          # EDA + обучение моделей
+    ├── main.py                       # FastAPI inference service
+    ├── loan_clean.csv                # очищенный датасет
+    ├── model_rf_CreditLoanData.pkl   # обученная модель (Random Forest)
+    ├── scaler_CreditLoanData.pkl     # StandardScaler для препроцессинга
+    ├── dataset/                      # сырые данные
+    └── Test.txt
+```
+
+---
+
 ## Demo
 
-**POST** `http://127.0.0.1:8000/predict/`
+**POST** `http://127.0.0.1:8000/predict`
 
 ```bash
-curl -X POST "http://127.0.0.1:8000/predict/" \
+curl -X POST "http://127.0.0.1:8000/predict" \
   -H "Content-Type: application/json" \
   -d '{
     "person_age": 28,
@@ -38,12 +57,14 @@ curl -X POST "http://127.0.0.1:8000/predict/" \
 **Response:**
 ```json
 {
-  "loan_status": "Банк одобрил выдачу кредита",
-  "probability_of_approval": "Вероятность одобрения банка: 78.43%"
+  "loan_status": "approved",
+  "message": "Банк одобрил выдачу кредита",
+  "probability_approved": 78.43,
+  "probability_rejected": 21.57
 }
 ```
 
-> `person_home_ownership` accepts: `"RENT"`, `"OWN"`, `"OTHER"`
+> `person_home_ownership` accepts (case-insensitive): `"RENT"`, `"OWN"`, `"OTHER"` — validated and normalized via a Pydantic `field_validator`.
 
 ---
 
@@ -57,8 +78,8 @@ curl -X POST "http://127.0.0.1:8000/predict/" \
 | Precision | 0.79  |
 | Recall    | 0.73  |
 
-**Best model:** Random Forest (`n_estimators=100`, `max_depth=6`)  
-**Baseline (Logistic Regression):** F1 = 0.68  
+**Best model:** Random Forest (`n_estimators=100`, `max_depth=6`)
+**Baseline (Logistic Regression):** F1 = 0.68
 ↑ +12% F1 improvement vs baseline
 
 ---
@@ -80,19 +101,19 @@ curl -X POST "http://127.0.0.1:8000/predict/" \
 4. **Preprocessing** — `StandardScaler` fitted on `X_train` only, then applied to `X_test` (no leakage)
 5. **Model training** — compared Logistic Regression, Decision Tree (`max_depth=5`), and Random Forest (`max_depth=6`, 100 trees)
 6. **Evaluation** — Accuracy, Precision, Recall, F1, full classification report per model
-7. **Deployment** — FastAPI endpoint reconstructs OHE features from raw string input, scales, and returns prediction + probability
+7. **Deployment** — FastAPI endpoint reconstructs OHE features from raw string input via `build_features()`, scales with the saved `StandardScaler`, and returns prediction + probability from the saved Random Forest model
 
 ---
 
 ## Key Challenges & Solutions
 
-**Categorical feature handling in the inference pipeline**  
-The training pipeline used `pd.get_dummies` to encode `person_home_ownership`, but the API receives a raw string — not a pre-encoded vector. Naively passing string input would break the scaler → manually reconstructed the OHE columns in `main.py` using a fixed category list `['OTHER', 'OWN', 'RENT']`, matching the training schema exactly → inference now produces correct feature vectors for all valid inputs.
+**Categorical feature handling in the inference pipeline**
+The training pipeline used `pd.get_dummies` to encode `person_home_ownership`, but the API receives a raw string — not a pre-encoded vector. Naively passing string input would break the scaler → manually reconstructed the OHE columns in `main.py` (`build_features()`) using a fixed category list `["OTHER", "OWN", "RENT"]`, matching the training schema exactly → inference now produces correct feature vectors for all valid inputs.
 
-**Class imbalance (78/22 split)**  
+**Class imbalance (78/22 split)**
 Imbalanced target variable → majority-class bias in predictions → added `stratify=y` to `train_test_split` to preserve class proportions in both folds → Recall on the minority class (default=1) improved from 0.62 to 0.73.
 
-**Overfitting in tree-based models**  
+**Overfitting in tree-based models**
 Decision Tree without depth constraints reached 99% training accuracy but only 78% on test → set `max_depth=5` for DT and `max_depth=6` for RF → Random Forest test accuracy stabilized at 87% with a train/test gap below 5%.
 
 ---
@@ -100,7 +121,7 @@ Decision Tree without depth constraints reached 99% training accuracy but only 7
 ## Tech Stack
 
 | Category   | Tools                                |
-|------------|--------------------------------------|
+|------------|---------------------------------------|
 | Language   | Python 3.11                          |
 | ML         | scikit-learn, joblib                 |
 | Data       | pandas, NumPy                        |
@@ -112,10 +133,10 @@ Decision Tree without depth constraints reached 99% training accuracy but only 7
 
 ## Deployment
 
-The trained model is served as a REST API using **FastAPI**. The endpoint accepts 7 applicant features, reconstructs the One-Hot Encoded home ownership vector internally, scales the full feature vector, and returns both a human-readable decision and a probability score.
+The trained model is served as a REST API using **FastAPI**. On startup (`lifespan`), the model and scaler are loaded once into `app.state`. The endpoint accepts 7 applicant features, reconstructs the One-Hot Encoded home ownership vector internally, scales the full feature vector, and returns both a machine-readable decision (`loan_status`) and a probability score for each class.
 
 ```
-POST /predict/
+POST /predict
 ```
 
 **To run locally:**
@@ -136,11 +157,11 @@ pip install -r requirements.txt
 ```
 
 ```bash
-jupyter notebook credit_risk_model.ipynb
+jupyter notebook CreditLoanData/CreditLoanData.ipynb
 ```
 
 ```bash
-python main.py
+python CreditLoanData/main.py
 ```
 
 ---
